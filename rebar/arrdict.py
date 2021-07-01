@@ -1,5 +1,6 @@
 from multiprocessing import Value
 import numpy as np
+from copy import deepcopy
 from functools import partialmethod
 from . import dotdict
 try:
@@ -160,3 +161,70 @@ def clone(t):
     if hasattr(t, 'copy'):
         return t.copy()
     return t
+
+def create_empty_col(x,lib):    
+    # in-place op
+    if isinstance(x, dict):
+        empty_col = x.map(lambda t: lib.empty([0]+list(t.shape[1:])))
+    else:
+        empty_col = lib.empty([0]+list(x.shape[1:]))
+    return empty_col
+
+def match_dict(source,target,lib):
+    if not isinstance(source, dict):
+        return
+        
+    for k in target.keys():
+        if k not in source.keys():
+            source[k] = create_empty_col(target[k], lib)
+        else:
+            match_dict(source[k],target[k],lib)
+
+def merge_and_cat(inp, *args, **kwargs):
+    lib = torch if isinstance(dotdict.leaves(inp)[0], torch.Tensor) else np
+    # create a copy of x first
+    x = [deepcopy(t) for t in inp]
+    # put all keys into the first dict
+    assert isinstance(x[0], dict)
+    for d in x[1:]:
+        match_dict(x[0],d,lib)
+        # for k in d.keys():
+        #     if k not in x[0]:
+        #         x[0][k] = create_empty_col(d[k], lib)
+        #         print(x[0])
+        #     else:
+
+    # copy the keys from the first dict
+    for d in x[1:]:
+        match_dict(d,x[0],lib)
+        # for k in x[0].keys():
+        #     if k not in d:
+        #         d[k] = create_empty_col(x[0][k], lib)
+    # for i,d in enumerate(x):
+    #     print(i, d)
+    return cat(x,*args, **kwargs)
+
+
+@dotdict.mapping
+def postpad(x,pad_size,dim=0):
+    if isinstance(x[0], dict):
+        ks = x[0].keys()
+        return x[0].__class__({k: postpad([y[k] for y in x], pad_size, dim) for k in ks})
+    if TORCH and isinstance(x, torch.Tensor):
+        # https://discuss.pytorch.org/t/how-to-do-padding-based-on-lengths/24442
+        out_dims = list(x.shape)
+        out_dims[dim] += pad_size
+        out = x.data.new(*out_dims).fill_(0)
+        length = x.size(dim)
+        out.index_copy_(dim,torch.arange(length),x)
+        return out
+
+    if isinstance(x, np.ndarray):
+        pad = (0,pad_size)
+        pad_width = [(0,0) for i in range(len(x.shape))] 
+        pad_width[dim] = pad
+        padded_seq = np.pad(x, pad_width)
+        return padded_seq
+
+    raise ValueError(f'Can\'t pad {type(x[0])}')
+    
