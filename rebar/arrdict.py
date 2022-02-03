@@ -9,6 +9,9 @@ try:
 except ModuleNotFoundError:
     TORCH = False
 
+SCREEN_WIDTH = 119
+SCREEN_HEIGHT = 200
+
 def _arrdict_factory():
     # This is done with a factory because I am a lazy man and I didn't fancy defining all the binary ops on 
     # the arrdict manually.
@@ -22,6 +25,9 @@ def _arrdict_factory():
 
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
+
+        def __str__(self):
+            return treestr(self)
 
         def __getitem__(self, x):
             if isinstance(x, str):
@@ -61,6 +67,41 @@ def _arrdict_factory():
     methods['__doc__'] = _arrdict_base.__doc__
 
     return type('arrdict', (_arrdict_base,), methods)
+
+def treestr(t):
+    """Stringifies a tree structure. These turn up all over the place in my code, so it's worth factoring out"""
+    key_length = max(map(len, map(str, t.keys()))) if t.keys() else 0
+    max_spaces = 4 + key_length
+    val_length = SCREEN_WIDTH - max_spaces
+    
+    d = {}
+    for k, v in t.items():
+        if isinstance(v, dotdict.dotdict):
+            d[k] = str(v)
+        elif isinstance(v, (list, set, dict)):
+            d[k] = f'{type(v).__name__}({len(v)},)'
+        elif hasattr(v, 'shape') and hasattr(v, 'dtype'):                    
+            d[k] = f'{type(v).__name__}({tuple(v.shape)}, {v.dtype})'
+        elif hasattr(v, 'shape'):
+            d[k] = f'{type(v).__name__}({tuple(v.shape)})'
+        else:
+            lines = str(v).splitlines()
+            if (len(lines) > 1) or (len(lines[0]) > val_length):
+                d[k] = lines[0][:val_length] + ' ...'
+            else:
+                d[k] = lines[0]
+
+    s = [f'{type(t).__name__}:']
+    for k, v in d.items():
+        lines = v.splitlines() or ['']
+        s.append(str(k) + ' '*(max_spaces - len(str(k))) + lines[0])
+        for l in lines[1:]:
+            s.append(' '*max_spaces + l)
+        if len(s) >= SCREEN_HEIGHT-1:
+            s.append('...')
+            break
+
+    return '\n'.join(s)
 
 arrdict = _arrdict_factory()
 
@@ -165,9 +206,9 @@ def clone(t):
 def create_empty_col(x,lib):    
     # in-place op
     if isinstance(x, dict):
-        empty_col = x.map(lambda t: lib.empty([0]+list(t.shape[1:])))
+        empty_col = x.map(lambda t: lib.empty([0]+list(t.shape[1:]), dtype=torch.float if lib is torch else np.float32))
     else:
-        empty_col = lib.empty([0]+list(x.shape[1:]))
+        empty_col = lib.empty([0]+list(x.shape[1:]), dtype=torch.float if lib is torch else np.float32)
     return empty_col
 
 def match_dict(source,target,lib):
@@ -206,20 +247,22 @@ def merge_and_cat(inp, *args, **kwargs):
 
 
 @dotdict.mapping
-def postpad(x,pad_size,dim=0):
+def postpad(x,max_len,dim=0):
     if isinstance(x[0], dict):
         ks = x[0].keys()
-        return x[0].__class__({k: postpad([y[k] for y in x], pad_size, dim) for k in ks})
+        return x[0].__class__({k: postpad([y[k] for y in x], max_len, dim) for k in ks})
     if TORCH and isinstance(x, torch.Tensor):
         # https://discuss.pytorch.org/t/how-to-do-padding-based-on-lengths/24442
         out_dims = list(x.shape)
+        pad_size = max_len - out_dims[dim]
         out_dims[dim] += pad_size
         out = x.data.new(*out_dims).fill_(0)
         length = x.size(dim)
-        out.index_copy_(dim,torch.arange(length),x)
+        out.index_copy_(dim,torch.arange(length, device=x.device),x)
         return out
 
     if isinstance(x, np.ndarray):
+        pad_size = max_len - list(x.shape)[dim]
         pad = (0,pad_size)
         pad_width = [(0,0) for i in range(len(x.shape))] 
         pad_width[dim] = pad
