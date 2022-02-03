@@ -8,10 +8,10 @@ setup(name='rebar',
       packages=find_packages(),
       python_requires='>=3.6',
       install_requires=[
-            'av>=8',
-            'bokeh>=2',
-            'ipywidgets>=7',
-            'psutil>=5',
-            'pandas>=1'
+            # 'av>=8',
+            # 'bokeh>=2',
+            # 'ipywidgets>=7',
+            # 'psutil>=5',
+            # 'pandas>=1'
         ]
     )
